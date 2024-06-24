@@ -7,23 +7,23 @@ use std::process::ExitCode;
 use clap::Parser;
 use jsonwebtoken::jwk::JwkSet;
 use owo_colors::OwoColorize;
-use pavex_cli::activation::{
+use pxcli_unlocked::activation::{
     background_token_refresh, check_activation, get_activation_key,
     get_activation_key_if_necessary, CliTokenError,
 };
-use pavex_cli::cargo_install::{cargo_install, GitSourceRevision, Source};
-use pavex_cli::cli_kind::CliKind;
-use pavex_cli::command::{Cli, Color, Command, SelfCommands};
-use pavex_cli::dependencies::installers;
-use pavex_cli::dependencies::installers::{CargoPx, NightlyToolchain, RustdocJson, Rustup};
-use pavex_cli::locator::PavexLocator;
-use pavex_cli::package_graph::compute_package_graph;
-use pavex_cli::pavexc::{get_or_install_from_graph, get_or_install_from_version};
-use pavex_cli::prebuilt::download_prebuilt;
-use pavex_cli::state::State;
-use pavex_cli::user_input::{confirm, mandatory_question};
-use pavex_cli::utils;
-use pavex_cli::version::latest_released_version;
+use pxcli_unlocked::cargo_install::{cargo_install, GitSourceRevision, Source};
+use pxcli_unlocked::cli_kind::CliKind;
+use pxcli_unlocked::command::{Cli, Color, Command, SelfCommands};
+use pxcli_unlocked::dependencies::installers;
+use pxcli_unlocked::dependencies::installers::{CargoPx, NightlyToolchain, RustdocJson, Rustup};
+use pxcli_unlocked::locator::PavexLocator;
+use pxcli_unlocked::package_graph::compute_package_graph;
+use pxcli_unlocked::pavexc::{get_or_install_from_graph, get_or_install_from_version};
+use pxcli_unlocked::prebuilt::download_prebuilt;
+use pxcli_unlocked::state::State;
+use pxcli_unlocked::user_input::{confirm, mandatory_question};
+use pxcli_unlocked::utils;
+use pxcli_unlocked::version::latest_released_version;
 use pavexc_cli_client::commands::generate::{BlueprintArgument, GenerateError};
 use pavexc_cli_client::commands::new::NewError;
 use pavexc_cli_client::commands::new::TemplateName;
@@ -134,7 +134,7 @@ fn generate(
     output: PathBuf,
     check: bool,
 ) -> Result<ExitCode, anyhow::Error> {
-    let pavexc_cli_path = if let Some(pavexc_override) = pavex_cli::env::pavexc_override() {
+    let pavexc_cli_path = if let Some(pavexc_override) = pxcli_unlocked::env::pavexc_override() {
         pavexc_override
     } else {
         // Match the version of the `pavexc` binary with the version of the `pavex` library
@@ -169,7 +169,7 @@ fn scaffold_project(
     path: PathBuf,
     template: TemplateName,
 ) -> Result<ExitCode, anyhow::Error> {
-    let pavexc_cli_path = if let Some(pavexc_override) = pavex_cli::env::pavexc_override() {
+    let pavexc_cli_path = if let Some(pavexc_override) = pxcli_unlocked::env::pavexc_override() {
         pavexc_override
     } else {
         let version = State::new(locator)
@@ -236,7 +236,7 @@ fn uninstall(
 fn update(shell: &mut Shell) -> Result<ExitCode, anyhow::Error> {
     shell.status("Checking", "for updates to Pavex CLI")?;
     let latest_version = latest_released_version()?;
-    let current_version = pavex_cli::env::version();
+    let current_version = pxcli_unlocked::env::version();
     if latest_version <= current_version {
         shell.status(
             "Up to date",
@@ -561,7 +561,7 @@ fn init_miette_hook(cli: &Cli) {
         } else {
             handler.without_cause_chain()
         };
-        if let Some(width) = pavex_cli::env::tty_width() {
+        if let Some(width) = pxcli_unlocked::env::tty_width() {
             handler = handler.width(width);
         }
         match color {

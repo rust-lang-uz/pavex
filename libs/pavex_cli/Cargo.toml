@@ -1,5 +1,5 @@
 [package]
-name = "pavex_cli"
+name = "pxcli_unlocked"
 version.workspace = true
 description = "The companion CLI for Pavex, a Rust framework to build API services and web applications."
 keywords = ["pavex"]

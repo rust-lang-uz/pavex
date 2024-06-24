@@ -125,7 +125,7 @@ fn key_algo2algo(key_algorithm: KeyAlgorithm) -> Result<Algorithm, anyhow::Error
 /// The only way to obtain one is via [`CliToken::validate`].
 pub struct ValidatedClaims {
     #[serde(with = "time::serde::timestamp", rename = "iat")]
-    issued_at: time::OffsetDateTime,
+    pub issued_at: time::OffsetDateTime,
 }
 
 impl ValidatedClaims {
