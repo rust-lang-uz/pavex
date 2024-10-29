@@ -2074,61 +2074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pavex_cli"
-version = "0.1.49"
-dependencies = [
- "anstyle",
- "anyhow",
- "bytes",
- "cargo-like-utils",
- "clap",
- "clap-stdin",
- "config",
- "fs-err",
- "guppy",
- "hex",
- "jsonwebtoken",
- "libc",
- "miette",
- "owo-colors",
- "pavex_cli_deps",
- "pavex_miette",
- "pavex_test_runner",
- "pavexc",
- "pavexc_cli_client",
- "pem",
- "px_workspace_hack",
- "redact",
- "remove_dir_all",
- "reqwest",
- "reqwest-middleware",
- "reqwest-retry",
- "reqwest-tracing",
- "ring",
- "self-replace",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "supports-color",
- "tar",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "toml",
- "tracing",
- "tracing-chrome",
- "tracing-subscriber",
- "ureq",
- "vergen-gitcl",
- "windows-sys 0.59.0",
- "xdg-home",
- "xz2",
- "zip",
-]
-
-[[package]]
 name = "pavex_cli_client"
 version = "0.1.49"
 dependencies = [
@@ -2578,6 +2523,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "pxcli_unlocked"
+version = "0.1.49"
+dependencies = [
+ "anstyle",
+ "anyhow",
+ "bytes",
+ "cargo-like-utils",
+ "clap",
+ "clap-stdin",
+ "config",
+ "fs-err",
+ "guppy",
+ "hex",
+ "jsonwebtoken",
+ "libc",
+ "miette",
+ "owo-colors",
+ "pavex_cli_deps",
+ "pavex_miette",
+ "pavex_test_runner",
+ "pavexc",
+ "pavexc_cli_client",
+ "pem",
+ "px_workspace_hack",
+ "redact",
+ "remove_dir_all",
+ "reqwest",
+ "reqwest-middleware",
+ "reqwest-retry",
+ "reqwest-tracing",
+ "ring",
+ "self-replace",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "supports-color",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
+ "ureq",
+ "vergen-gitcl",
+ "windows-sys 0.59.0",
+ "xdg-home",
+ "xz2",
+ "zip",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2623,59 +2623,6 @@ dependencies = [
  "socket2",
  "tracing",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "pxcli_unlocked"
-version = "0.1.44"
-dependencies = [
- "anstyle",
- "anyhow",
- "bytes",
- "cargo-like-utils",
- "clap",
- "clap-stdin",
- "config",
- "fs-err",
- "guppy",
- "hex",
- "jsonwebtoken",
- "libc",
- "miette",
- "owo-colors",
- "pavex_miette",
- "pavex_test_runner",
- "pavexc",
- "pavexc_cli_client",
- "pem",
- "redact",
- "remove_dir_all",
- "reqwest",
- "reqwest-middleware",
- "reqwest-retry",
- "reqwest-tracing",
- "ring",
- "self-replace",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "supports-color",
- "tar",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "toml",
- "tracing",
- "tracing-chrome",
- "tracing-subscriber",
- "ureq",
- "vergen",
- "windows-sys 0.52.0",
- "xdg-home",
- "xz2",
- "zip",
 ]
 
 [[package]]

@@ -11,17 +11,17 @@ use pxcli_unlocked::activation::{
     background_token_refresh, check_activation, get_activation_key,
     get_activation_key_if_necessary, CliTokenError,
 };
-use pavex_cli::cargo_install::{cargo_install, GitSourceRevision, Source};
-use pavex_cli::cli_kind::CliKind;
-use pavex_cli::command::{Cli, Color, Command, SelfCommands};
-use pavex_cli::locator::PavexLocator;
-use pavex_cli::package_graph::compute_package_graph;
-use pavex_cli::pavexc::{get_or_install_from_graph, get_or_install_from_version};
-use pavex_cli::prebuilt::download_prebuilt;
-use pavex_cli::state::State;
-use pavex_cli::user_input::{confirm, mandatory_question};
-use pavex_cli::utils;
-use pavex_cli::version::latest_released_version;
+use pxcli_unlocked::cargo_install::{cargo_install, GitSourceRevision, Source};
+use pxcli_unlocked::cli_kind::CliKind;
+use pxcli_unlocked::command::{Cli, Color, Command, SelfCommands};
+use pxcli_unlocked::locator::PavexLocator;
+use pxcli_unlocked::package_graph::compute_package_graph;
+use pxcli_unlocked::pavexc::{get_or_install_from_graph, get_or_install_from_version};
+use pxcli_unlocked::prebuilt::download_prebuilt;
+use pxcli_unlocked::state::State;
+use pxcli_unlocked::user_input::{confirm, mandatory_question};
+use pxcli_unlocked::utils;
+use pxcli_unlocked::version::latest_released_version;
 use pavex_cli_deps::{verify_installation, CargoPx, IfAutoinstallable, Rustup};
 use pavexc_cli_client::commands::generate::{BlueprintArgument, GenerateError};
 use pavexc_cli_client::commands::new::NewError;
