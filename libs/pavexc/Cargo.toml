@@ -8,7 +8,8 @@ repository.workspace = true
 license.workspace = true
 
 [build-dependencies]
-vergen = { workspace = true, features = ["build", "git", "gitcl"] }
+vergen-gitcl = { workspace = true }
+anyhow = { workspace = true }
 
 [features]
 # Enable additional debug assertions to ensure correctness
@@ -18,8 +19,8 @@ vergen = { workspace = true, features = ["build", "git", "gitcl"] }
 debug_assertions = []
 
 [dependencies]
-pavex = { path = "../pavex", version = "0.1.44" }
-pavex_bp_schema = { path = "../pavex_bp_schema", version = "0.1.44" }
+pavex = { path = "../pavex", version = "0.1.49" }
+pavex_bp_schema = { path = "../pavex_bp_schema", version = "0.1.49" }
 syn = { workspace = true, features = ["full", "extra-traits", "visit"] }
 rustdoc-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -48,9 +49,11 @@ textwrap = { workspace = true }
 once_cell = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
 semver = { workspace = true }
-persist_if_changed = { path = "../persist_if_changed", version = "0.1.44" }
+persist_if_changed = { path = "../persist_if_changed", version = "0.1.49" }
 matchit = { version = "0.7", package = "pavex_matchit" }
 relative-path = { workspace = true }
+camino = { workspace = true }
+xxhash-rust = { workspace = true, features = ["xxh64"] }
 
 # Sqlite cache
 xdg-home = { workspace = true }
@@ -60,3 +63,4 @@ r2d2 = { workspace = true }
 bincode = { workspace = true }
 rayon = { workspace = true }
 num_cpus = { workspace = true }
+px_workspace_hack = { version = "0.1", path = "../px_workspace_hack" }

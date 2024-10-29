@@ -19,6 +19,7 @@ name = "snaps"
 anyhow = { workspace = true }
 ahash = { workspace = true }
 console = { workspace = true }
+cargo_metadata = { workspace = true }
 fs-err = { workspace = true }
 libtest-mimic = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -30,10 +31,14 @@ walkdir = { workspace = true }
 serde_json = { workspace = true }
 itertools = { workspace = true }
 sha2 = { workspace = true }
-persist_if_changed = { path = "../persist_if_changed", version = "0.1.44" }
+persist_if_changed = { path = "../persist_if_changed", version = "0.1.49" }
 object-pool = { workspace = true }
 num_cpus = { workspace = true }
 globwalk = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 regex = { workspace = true }
 once_cell = { workspace = true }
+pavexc = { path = "../pavexc" }
+guppy = { workspace = true }
+rayon = { workspace = true }
+px_workspace_hack = { version = "0.1", path = "../px_workspace_hack" }

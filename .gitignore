@@ -1,7 +1,9 @@
-/libs/ui_test_envs
+/libs/ui_tests/target
+/libs/ui_tests/**/generated_app/
+/libs/ui_tests/Cargo.lock
 /libs/target
 /libs/vendor
-/libs/.cargo
+/ci_utils/target
 /doc_examples/tutorial_envs/
 /doc_examples/**/target
 /examples/**/vendor
@@ -14,3 +16,4 @@
 trace-*.json
 /.cache/
 /docs/api_reference/
+.direnv/

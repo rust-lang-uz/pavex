@@ -1,0 +1,17 @@
+[package]
+name = "pavex_session_memory_store"
+version.workspace = true
+description = "An in-memory session store compatible with `pavex-session`"
+keywords = ["pavex", "sessions", "HTTP", "auth"]
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+pavex_session = { version = "0.1.49", path = "../pavex_session" }
+time = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+px_workspace_hack = { version = "0.1", path = "../px_workspace_hack" }

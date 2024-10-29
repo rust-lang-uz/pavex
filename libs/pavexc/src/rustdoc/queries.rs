@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
@@ -42,6 +43,9 @@ pub struct CrateCollection {
     /// `elsa` doesn't expose a frozen BTreeSet yet, so we use a map with empty values
     /// to emulate it.
     access_log: FrozenMap<PackageId, Box<()>>,
+    /// The name of the toolchain used to generate the JSON documentation of a crate.
+    /// It is assumed to be a toolchain available via `rustup`.
+    toolchain_name: String,
 }
 
 impl std::fmt::Debug for CrateCollection {
@@ -54,10 +58,11 @@ impl std::fmt::Debug for CrateCollection {
 }
 
 #[tracing::instrument]
-fn compute_package_graph() -> Result<PackageGraph, anyhow::Error> {
+fn compute_package_graph(current_directory: PathBuf) -> Result<PackageGraph, anyhow::Error> {
     // `cargo metadata` seems to be the only reliable way of retrieving the path to
     // the root manifest of the current workspace for a Rust project.
     guppy::MetadataCommand::new()
+        .current_dir(current_directory)
         .exec()
         .map_err(|e| anyhow!(e))?
         .build_graph()
@@ -66,25 +71,31 @@ fn compute_package_graph() -> Result<PackageGraph, anyhow::Error> {
 
 impl CrateCollection {
     /// Initialise the collection for a `PackageGraph`.
-    pub fn new(project_fingerprint: String) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        toolchain_name: String,
+        workspace_directory: PathBuf,
+    ) -> Result<Self, anyhow::Error> {
         let span = Span::current();
         let thread_handle = thread::spawn(move || {
             let _guard = span.enter();
-            compute_package_graph()
+            compute_package_graph(workspace_directory)
         });
-        let cache = RustdocGlobalFsCache::new()?;
+        let cache = RustdocGlobalFsCache::new(&toolchain_name)?;
 
         let package_graph = thread_handle
             .join()
             .map_err(|_| anyhow!("The thread computing the package graph panicked"))?
             .context("Failed to compute the package graph for the current workspace")?;
 
+        // We use the path to the root manifest as a unique identifier for the project.
+        let project_fingerprint = package_graph.workspace().root().to_string();
         Ok(Self {
             package_id2krate: FrozenMap::new(),
             package_graph,
             disk_cache: cache,
             access_log: FrozenMap::new(),
             project_fingerprint,
+            toolchain_name,
         })
     }
 
@@ -153,7 +164,7 @@ impl CrateCollection {
             cache: RustdocGlobalFsCache,
         ) -> (PackageId, Option<Crate>) {
             let cache_key = RustdocCacheKey::new(&package_id, &package_graph);
-            match cache.get(&cache_key) {
+            match cache.get(&cache_key, &package_graph) {
                 Ok(o) => (package_id, o),
                 Err(e) => {
                     tracing::warn!(
@@ -193,7 +204,12 @@ impl CrateCollection {
         }
 
         // The ones that are still missing need to be computed.
-        let results = batch_compute_crate_docs(&self.package_graph, to_be_computed.into_iter())?;
+        let results = batch_compute_crate_docs(
+            &self.toolchain_name,
+            &self.package_graph,
+            to_be_computed.into_iter(),
+            self.package_graph.workspace().root().as_std_path(),
+        )?;
 
         for (package_id, krate) in results {
             let krate =
@@ -204,7 +220,10 @@ impl CrateCollection {
 
             // Let's make sure to store them in the on-disk cache for next time.
             let cache_key = RustdocCacheKey::new(&package_id, &self.package_graph);
-            if let Err(e) = self.disk_cache.insert(&cache_key, &krate) {
+            if let Err(e) = self
+                .disk_cache
+                .insert(&cache_key, &krate, &self.package_graph)
+            {
                 tracing::warn!(
                     error.msg = tracing::field::display(&e),
                     error.error_chain = tracing::field::debug(&e),
@@ -235,7 +254,7 @@ impl CrateCollection {
 
         // If not, let's try to retrieve them from the on-disk cache.
         let cache_key = RustdocCacheKey::new(package_id, &self.package_graph);
-        match self.disk_cache.get(&cache_key) {
+        match self.disk_cache.get(&cache_key, &self.package_graph) {
             Ok(Some(krate)) => {
                 self.package_id2krate
                     .insert(package_id.to_owned(), Box::new(krate));
@@ -253,14 +272,22 @@ impl CrateCollection {
         }
 
         // If we don't have them in the on-disk cache, we need to compute them.
-        let krate = compute_crate_docs(&self.package_graph, package_id)?;
+        let krate = compute_crate_docs(
+            &self.toolchain_name,
+            &self.package_graph,
+            package_id,
+            self.package_graph.workspace().root().as_std_path(),
+        )?;
         let krate = Crate::new(krate, package_id.to_owned()).map_err(|e| CannotGetCrateData {
             package_spec: package_id.to_string(),
             source: Arc::new(e),
         })?;
 
         // Let's make sure to store them in the on-disk cache for next time.
-        if let Err(e) = self.disk_cache.insert(&cache_key, &krate) {
+        if let Err(e) = self
+            .disk_cache
+            .insert(&cache_key, &krate, &self.package_graph)
+        {
             tracing::warn!(
                 error.msg = tracing::field::display(&e),
                 error.error_chain = tracing::field::debug(&e),
@@ -693,6 +720,7 @@ impl Crate {
         index_local_types(
             &krate,
             &package_id,
+            IndexSet::new(),
             vec![],
             &mut id2public_import_paths,
             &mut id2private_import_paths,
@@ -832,7 +860,7 @@ impl Crate {
     }
 
     pub fn get_type_by_local_type_id(&self, id: &rustdoc_types::Id) -> Cow<'_, Item> {
-        let type_ = self.core.krate.index.get(id);
+        let type_ = self.maybe_get_type_by_local_type_id(id);
         if type_.is_none() {
             panic!(
                 "Failed to look up the type id `{}` in the rustdoc's index for package `{}`.",
@@ -841,6 +869,12 @@ impl Crate {
             )
         }
         type_.unwrap()
+    }
+
+    /// Same as `get_type_by_local_type_id`, but returns `None` instead of panicking
+    /// if the type is not found.
+    pub fn maybe_get_type_by_local_type_id(&self, id: &rustdoc_types::Id) -> Option<Cow<'_, Item>> {
+        self.core.krate.index.get(id)
     }
 
     /// Types can be exposed under multiple paths.
@@ -866,6 +900,9 @@ impl Crate {
 fn index_local_types<'a>(
     krate: &'a rustdoc_types::Crate,
     package_id: &'a PackageId,
+    // The ordered set of modules we navigated to reach this item.
+    // It used to detect infinite loops.
+    mut navigation_history: IndexSet<rustdoc_types::Id>,
     mut current_path: Vec<&'a str>,
     public_path_index: &mut HashMap<rustdoc_types::Id, BTreeSet<Vec<String>>>,
     private_path_index: &mut HashMap<rustdoc_types::Id, BTreeSet<Vec<String>>>,
@@ -901,10 +938,12 @@ fn index_local_types<'a>(
                 .as_deref()
                 .expect("All 'module' items have a 'name' property");
             current_path.push(current_path_segment);
+            navigation_history.insert(*current_item_id);
             for item_id in &m.items {
                 index_local_types(
                     krate,
                     package_id,
+                    navigation_history.clone(),
                     current_path.clone(),
                     public_path_index,
                     private_path_index,
@@ -914,7 +953,7 @@ fn index_local_types<'a>(
                 )?;
             }
         }
-        ItemEnum::Import(i) => {
+        ItemEnum::Use(i) => {
             if let Some(imported_id) = &i.id {
                 match krate.index.get(imported_id) {
                     None => {
@@ -942,25 +981,44 @@ fn index_local_types<'a>(
                     }
                     Some(imported_item) => {
                         if let ItemEnum::Module(re_exported_module) = &imported_item.inner {
-                            if !i.glob {
+                            if !i.is_glob {
                                 current_path.push(&i.name);
                             }
-                            for re_exported_item_id in &re_exported_module.items {
-                                index_local_types(
-                                    krate,
-                                    package_id,
-                                    current_path.clone(),
-                                    public_path_index,
-                                    private_path_index,
-                                    re_exports,
-                                    re_exported_item_id,
-                                    is_public,
-                                )?;
+                            // In Rust it is possible to create infinite loops with local modules!
+                            // Minimal example:
+                            // ```rust
+                            // pub struct A;
+                            // mod inner {
+                            //   pub use crate as b;
+                            // }
+                            // ```
+                            // We use this check to detect if we're about to get stuck in an infinite
+                            // loop, so that we can break early.
+                            // It does mean that some paths that _would_ be valid won't be recognised,
+                            // but this pattern is rarely used and for the time being we don't want to
+                            // take the complexity hit of making visible paths lazily evaluated.
+                            let infinite_loop = !navigation_history.insert(*imported_id);
+                            if !infinite_loop {
+                                for re_exported_item_id in &re_exported_module.items {
+                                    index_local_types(
+                                        krate,
+                                        package_id,
+                                        navigation_history.clone(),
+                                        current_path.clone(),
+                                        public_path_index,
+                                        private_path_index,
+                                        re_exports,
+                                        re_exported_item_id,
+                                        is_public,
+                                    )?;
+                                }
                             }
                         } else {
+                            navigation_history.insert(*imported_id);
                             index_local_types(
                                 krate,
                                 package_id,
+                                navigation_history,
                                 current_path.clone(),
                                 public_path_index,
                                 private_path_index,
@@ -1082,22 +1140,29 @@ impl RustdocKindExt for ItemEnum {
         match self {
             ItemEnum::Module(_) => "a module",
             ItemEnum::ExternCrate { .. } => "an external crate",
-            ItemEnum::Import(_) => "an import",
+            ItemEnum::Use(_) => "an import",
             ItemEnum::Union(_) => "a union",
             ItemEnum::Struct(_) => "a struct",
             ItemEnum::StructField(_) => "a struct field",
             ItemEnum::Enum(_) => "an enum",
             ItemEnum::Variant(_) => "an enum variant",
-            // TODO: this could also be a method! How do we find out?
-            ItemEnum::Function(_) => "a function",
+            ItemEnum::Function(func) => {
+                let mut func_kind = "a function";
+                if let Some((param, _)) = func.sig.inputs.first() {
+                    if param == "self" {
+                        func_kind = "a method";
+                    }
+                }
+
+                func_kind
+            }
             ItemEnum::Trait(_) => "a trait",
             ItemEnum::TraitAlias(_) => "a trait alias",
             ItemEnum::Impl(_) => "an impl block",
             ItemEnum::TypeAlias(_) => "a type alias",
-            ItemEnum::OpaqueTy(_) => "an opaque type",
             ItemEnum::Constant { .. } => "a constant",
             ItemEnum::Static(_) => "a static",
-            ItemEnum::ForeignType => "a foreign type",
+            ItemEnum::ExternType => "a foreign type",
             ItemEnum::Macro(_) => "a macro",
             ItemEnum::ProcMacro(_) => "a procedural macro",
             ItemEnum::Primitive(_) => "a primitive type",

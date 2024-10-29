@@ -63,7 +63,7 @@ impl App {
     /// report all errors to the user, but it may not be able to do so in all cases.
     pub fn build(
         bp: Blueprint,
-        project_fingerprint: String,
+        docs_toolchain_name: String,
     ) -> Result<(Self, Vec<miette::Error>), Vec<miette::Error>> {
         /// Exit early if there is at least one error.
         macro_rules! exit_on_errors {
@@ -79,8 +79,11 @@ impl App {
             };
         }
 
-        let krate_collection =
-            CrateCollection::new(project_fingerprint).map_err(|e| vec![anyhow2miette(e)])?;
+        let krate_collection = CrateCollection::new(
+            docs_toolchain_name,
+            std::env::current_dir().expect("Failed to determine the current directory"),
+        )
+        .map_err(|e| vec![anyhow2miette(e)])?;
         let package_graph = krate_collection.package_graph().to_owned();
         let mut diagnostics = vec![];
         let mut computation_db = ComputationDb::new();
@@ -133,6 +136,9 @@ impl App {
                 .collect();
             let mut handler_pipelines = IndexMap::new();
             for (i, handler_id) in handler_ids.into_iter().enumerate() {
+                let route_info = &router.handler_id2route_info[handler_id];
+                let span = tracing::info_span!("Compute request processing pipeline", route_info = %route_info);
+                let _guard = span.enter();
                 let Ok(processing_pipeline) = RequestHandlerPipeline::new(
                     *handler_id,
                     format!("route_{i}"),

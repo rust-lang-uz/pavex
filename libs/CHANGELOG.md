@@ -6,6 +6,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.49](https://github.com/LukeMathWalker/pavex/compare/0.1.48...0.1.49) - 2024-10-23
+
+### Added
+
+- First release of Pavex's HTTP sessions toolkit 🎉 ([#338](https://github.com/LukeMathWalker/pavex/pull/338))
+- Distinguish between methods and functions in error messages ([#344](https://github.com/LukeMathWalker/pavex/pull/344))
+- Start caching the JSON documentation of path dependencies. We rely on the hash of their contents to avoid serving stale data
+- Pavex will no longer emit duplicated diagnostics, thus reducing visual noise when code generation fails
+
+### Fixed
+
+- Pavex always uses a public path to refer to public items, even if they are defined in a private module
+- Detect infinite paths and break early to avoid stalls when generating server SDK crates
+- Ensure error observers are correctly added when dealing with errors in the call graph of a middleware of any kind
+- Perform cross-call-graph analysis to determine if additional `.clone()` statements are needed before invoking a middleware.
+- Don't discard spans if they match the provided log filter in pavexc
+
+### Other
+
+- Update dependencies to latest possible version. In particular, update 'rustdoc-types' and the nightly version used by 'pavexc'
+
+## [0.1.48](https://github.com/LukeMathWalker/pavex/compare/0.1.47...0.1.48) - 2024-09-02
+
+### Fixed
+- Avoid panic petgraph-related panic when inserting clone nodes to fix borrow checking errors ([#334](https://github.com/LukeMathWalker/pavex/pull/334))
+
+## [0.1.47](https://github.com/LukeMathWalker/pavex/compare/0.1.46...0.1.47) - 2024-08-14
+
+### Fixed
+- always use the specified toolchain, remove yet another location where nightly was hard-coded
+
+### Other
+- Pin a specific `nightly` version for each version of `pavexc`, ensuring they are compatible ([#331](https://github.com/LukeMathWalker/pavex/pull/331))
+- Allow overriding the `nightly` toolchain used to generate JSON docs via `PAVEXC_DOCS_TOOLCHAIN` ([#331](https://github.com/LukeMathWalker/pavex/pull/331))
+- Fix panics when performing dependency injection for complex call graphs ([#329](https://github.com/LukeMathWalker/pavex/pull/329))
+
+## [0.1.46](https://github.com/LukeMathWalker/pavex/compare/0.1.45...0.1.46) - 2024-07-27
+
+### Other
+- Feature gate tokio net feature for pavex behind server feature ([#324](https://github.com/LukeMathWalker/pavex/pull/324))
+- update Cargo.toml dependencies
+
+## [0.1.45](https://github.com/LukeMathWalker/pavex/compare/0.1.44...0.1.45) - 2024-07-02
+
+### Added
+- enable 'std' feature on the 'time' crate in 'pavex'
+
+### Fixed
+- std's collections can be used as prebuilt types ([#321](https://github.com/LukeMathWalker/pavex/pull/321))
+
+### Other
+- Add constructor for RequestHead ([#319](https://github.com/LukeMathWalker/pavex/pull/319))
+
 ## [0.1.44](https://github.com/LukeMathWalker/pavex/compare/0.1.43...0.1.44) - 2024-06-22
 
 ### Fixed

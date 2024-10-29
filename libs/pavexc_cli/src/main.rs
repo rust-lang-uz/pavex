@@ -1,18 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
+mod formatter;
+mod telemetry;
+
 use anyhow::Context;
+use cargo_like_utils::shell::Shell;
 use clap::{Parser, Subcommand};
+use formatter::ReversedFull;
 use generate_from_path::GenerateArgs;
 use liquid_core::Value;
 use miette::Severity;
 use owo_colors::OwoColorize;
-use pavexc::{App, AppWriter};
+use pavex_cli_deps::{verify_installation, IfAutoinstallable, RustdocJson, RustupToolchain};
+use pavexc::{App, AppWriter, DEFAULT_DOCS_TOOLCHAIN};
 use pavexc_cli_client::commands::new::TemplateName;
 use supports_color::Stream;
+use telemetry::Filtered;
 use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
@@ -21,7 +28,7 @@ use tracing_subscriber::EnvFilter;
 
 const INTROSPECTION_HEADING: &str = "Introspection";
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(author, version = VERSION, about, long_about = None)]
 struct Cli {
     #[clap(long, env = "PAVEXC_COLOR", default_value_t = Color::Auto)]
@@ -97,7 +104,7 @@ impl FromStr for Color {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// Generate a server SDK crate according to an application blueprint.
     Generate {
@@ -117,6 +124,10 @@ enum Commands {
         /// If it isn't, `pavexc` will return an error without updating
         /// the server SDK code.
         check: bool,
+        #[clap(long, env = "PAVEXC_DOCS_TOOLCHAIN", default_value = DEFAULT_DOCS_TOOLCHAIN)]
+        /// The name of the `rustup` toolchain that `pavexc` will use to generate the JSON documentation
+        /// for the crates in the dependency graph of this project.
+        docs_toolchain: String,
     },
     /// Scaffold a new Pavex project at <PATH>.
     New {
@@ -132,6 +143,24 @@ enum Commands {
         #[clap(short, long, value_parser, default_value = "api")]
         template: TemplateName,
     },
+    /// Information about this version of `pavexc`.
+    #[command(name = "self")]
+    Self_ {
+        #[clap(subcommand)]
+        command: SelfCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SelfCommands {
+    Setup {
+        #[clap(long, env = "PAVEXC_DOCS_TOOLCHAIN", default_value = DEFAULT_DOCS_TOOLCHAIN)]
+        /// The name of the `rustup` toolchain that `pavexc` will use to generate the JSON documentation
+        /// for the crates in the dependency graph of this project.
+        ///
+        /// It overrides the default toolchain associated with this version of `pavexc`.
+        docs_toolchain: String,
+    },
 }
 
 fn init_telemetry(
@@ -143,9 +172,9 @@ fn init_telemetry(
     let filter_layer = log_filter
         .map(|f| EnvFilter::try_new(f).expect("Invalid log filter configuration"))
         .unwrap_or_else(|| {
-            EnvFilter::try_new("info,pavexc=trace").expect("Invalid log filter configuration")
+            EnvFilter::try_new("info,pavexc=debug").expect("Invalid log filter configuration")
         });
-    let base = tracing_subscriber::registry().with(filter_layer);
+    let base = tracing_subscriber::registry();
     let mut chrome_guard = None;
     let trace_filename = format!(
         "./trace-pavexc-{}.json",
@@ -162,7 +191,13 @@ fn init_telemetry(
                 .with_file(false)
                 .with_target(false)
                 .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-                .with_timer(tracing_subscriber::fmt::time::uptime());
+                .with_timer(tracing_subscriber::fmt::time::uptime())
+                .event_format(ReversedFull);
+            let fmt_layer = Filtered {
+                base: filter_layer,
+                fields: BTreeMap::new(),
+                layer: fmt_layer,
+            };
             if profiling {
                 let (chrome_layer, guard) = ChromeLayerBuilder::new()
                     .file(trace_filename)
@@ -219,21 +254,63 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     .unwrap();
 
     better_panic::install();
-    let _guard = init_telemetry(cli.log_filter, cli.color, cli.log, cli.perf_profile);
+    let _guard = init_telemetry(cli.log_filter.clone(), cli.color, cli.log, cli.perf_profile);
+
+    tracing::trace!(cli = ?cli, "`pavexc` CLI options and flags");
     match cli.command {
         Commands::Generate {
             blueprint,
             diagnostics,
             output,
             check,
-        } => generate(blueprint, diagnostics, output, cli.color, check),
+            docs_toolchain,
+        } => generate(
+            blueprint,
+            docs_toolchain,
+            diagnostics,
+            output,
+            cli.color,
+            check,
+        ),
         Commands::New { path, template } => scaffold_project(path, template),
+        Commands::Self_ {
+            command: SelfCommands::Setup { docs_toolchain },
+        } => {
+            let mut shell = Shell::new();
+            let options = IfAutoinstallable::Autoinstall;
+            let toolchain = RustupToolchain {
+                name: docs_toolchain.clone(),
+            };
+            verify_installation(&mut shell, toolchain, options)?;
+            let rustdoc_json = RustdocJson {
+                toolchain: docs_toolchain,
+            };
+            verify_installation(&mut shell, rustdoc_json, options)?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+/// The dependencies of this version of `pavexc`.
+struct Deps {
+    /// The toolchain that `pavexc` will use to generate the JSON docs for crates in the
+    /// dependency tree of the current project.
+    docs_toolchain: ToolchainInfo,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ToolchainInfo {
+    /// The name of the toolchain.
+    ///
+    /// This must be a valid identifier for `rustup toolchain install`.
+    name: String,
 }
 
 #[tracing::instrument("Generate server sdk")]
 fn generate(
     blueprint: PathBuf,
+    docs_toolchain: String,
     diagnostics: Option<PathBuf>,
     output: PathBuf,
     color_profile: Color,
@@ -243,22 +320,23 @@ fn generate(
         let file = fs_err::OpenOptions::new().read(true).open(blueprint)?;
         ron::de::from_reader(&file)?
     };
-    // We use the path to the generated application crate as a fingerprint for the project.
-    let project_fingerprint = output.to_string_lossy().into_owned();
-    let app = match App::build(blueprint, project_fingerprint) {
-        Ok((a, warnings)) => {
-            for e in warnings {
+    let mut reporter = DiagnosticReporter::new(color_profile);
+    let (app, issues) = match App::build(blueprint, docs_toolchain) {
+        Ok((a, issues)) => {
+            for e in &issues {
                 assert_eq!(e.severity(), Some(Severity::Warning));
-                print_report(&e, color_profile);
             }
-            a
+            (Some(a), issues)
         }
-        Err(issues) => {
-            for e in issues {
-                print_report(&e, color_profile);
-            }
-            return Ok(ExitCode::FAILURE);
-        }
+        Err(issues) => (None, issues),
+    };
+
+    for e in issues {
+        reporter.print_report(&e);
+    }
+
+    let Some(app) = app else {
+        return Ok(ExitCode::FAILURE);
     };
     if let Some(diagnostic_path) = diagnostics {
         app.diagnostic_representation()
@@ -273,33 +351,53 @@ fn generate(
     generated_app.persist(&output, &mut writer)?;
     if let Err(errors) = writer.verify() {
         for e in errors {
-            print_report(&e, color_profile);
+            reporter.print_report(&e);
         }
         return Ok(ExitCode::FAILURE);
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn print_report(e: &miette::Report, color_profile: Color) {
-    let use_color = use_color_on_stderr(color_profile);
-    match e.severity() {
-        None | Some(Severity::Error) => {
-            if use_color {
-                eprintln!("{}: {e:?}", "ERROR".bold().red());
-            } else {
-                eprintln!("ERROR: {e:?}");
+/// The compiler may emit the same diagnostic more than once
+/// (for a variety of reasons). We use this helper to dedup them.
+struct DiagnosticReporter {
+    already_emitted: HashSet<String>,
+    use_color: bool,
+}
+
+impl DiagnosticReporter {
+    fn new(color_profile: Color) -> Self {
+        let use_color = use_color_on_stderr(color_profile);
+        Self {
+            already_emitted: Default::default(),
+            use_color,
+        }
+    }
+    fn print_report(&mut self, e: &miette::Report) {
+        let formatted = format!("{e:?}");
+        if self.already_emitted.contains(&formatted) {
+            // Avoid printing the same diagnostic multiple times.
+            return;
+        }
+        let prefix = match e.severity() {
+            None | Some(Severity::Error) => {
+                let mut p = "ERROR".to_string();
+                if self.use_color {
+                    p = p.bold().red().to_string();
+                }
+                p
             }
-        }
-        Some(Severity::Warning) => {
-            if use_color {
-                eprintln!("{}: {e:?}", "WARNING".bold().yellow());
-            } else {
-                eprintln!("WARNING: {e:?}");
+            Some(Severity::Warning) => {
+                let mut p = "WARNING".to_string();
+                if self.use_color {
+                    p = p.bold().yellow().to_string();
+                }
+                p
             }
-        }
-        _ => {
-            unreachable!()
-        }
+            _ => unreachable!(),
+        };
+        eprintln!("{prefix}: {formatted}");
+        self.already_emitted.insert(formatted);
     }
 }
 

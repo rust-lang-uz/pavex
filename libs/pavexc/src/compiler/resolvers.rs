@@ -7,15 +7,18 @@ use std::sync::Arc;
 use ahash::{HashMap, HashMapExt};
 use anyhow::anyhow;
 use guppy::PackageId;
+use once_cell::sync::OnceCell;
 use rustdoc_types::{GenericArg, GenericArgs, GenericParamDefKind, ItemEnum, Type};
 
 use crate::language::{
     Callable, Generic, GenericArgument, GenericLifetimeParameter, InvocationStyle, PathType,
-    ResolvedPath, ResolvedPathGenericArgument, ResolvedPathLifetime, ResolvedPathType,
-    ResolvedType, Slice, Tuple, TypeReference, UnknownPath,
+    ResolvedPath, ResolvedPathGenericArgument, ResolvedPathLifetime, ResolvedPathSegment,
+    ResolvedPathType, ResolvedType, Slice, Tuple, TypeReference, UnknownPath,
 };
-use crate::rustdoc::{CannotGetCrateData, RustdocKindExt};
+use crate::rustdoc::{CannotGetCrateData, ResolvedItemWithParent, RustdocKindExt};
 use crate::rustdoc::{CrateCollection, ResolvedItem};
+
+use super::utils::process_framework_path;
 
 pub(crate) fn resolve_type(
     type_: &Type,
@@ -27,17 +30,26 @@ pub(crate) fn resolve_type(
 ) -> Result<ResolvedType, anyhow::Error> {
     match type_ {
         Type::ResolvedPath(rustdoc_types::Path { id, args, name }) => {
-            let re_exporter_crate_name = if id.0.starts_with("0:") {
-                // 0 is the crate index of local types.
-                None
-            } else {
-                // It is not guaranteed that this type will be from a direct dependency of `used_by_package_id`.
-                // It might be a re-export from a transitive dependency, done by a direct dependency.
-                // Unfortunately, `rustdoc` does not provide the package id of the crate where the type
-                // was re-exported from, creating a "missing link".
-                // We try to infer it from the `name` property, which is usually the fully qualified
-                // name of the type, e.g. `std::collections::HashMap`.
-                name.split("::").next()
+            let re_exporter_crate_name = {
+                let mut re_exporter = None;
+                if let Some(krate) = krate_collection.get_crate_by_package_id(used_by_package_id) {
+                    if let Some(item) = krate.maybe_get_type_by_local_type_id(id) {
+                        // 0 is the crate index of local types.
+                        if item.crate_id == 0 {
+                            re_exporter = Some(None);
+                        }
+                    }
+                }
+                if re_exporter.is_none() {
+                    // It is not guaranteed that this type will be from a direct dependency of `used_by_package_id`.
+                    // It might be a re-export from a transitive dependency, done by a direct dependency.
+                    // Unfortunately, `rustdoc` does not provide the package id of the crate where the type
+                    // was re-exported from, creating a "missing link".
+                    // We try to infer it from the `name` property, which is usually the fully qualified
+                    // name of the type, e.g. `std::collections::HashMap`.
+                    re_exporter = Some(name.split("::").next());
+                }
+                re_exporter.unwrap()
             };
             let (global_type_id, base_type) = krate_collection
                 .get_canonical_path_by_local_type_id(
@@ -80,12 +92,16 @@ pub(crate) fn resolve_type(
                                     anyhow::bail!("Expected `{:?}` to be a generic _type_ parameter, but it wasn't!", provided_arg)
                                 }
                             } else if let Some(default) = default {
-                                resolve_type(
+                                let default = resolve_type(
                                     default,
                                     &global_type_id.package_id,
                                     krate_collection,
                                     &generic_bindings,
-                                )?
+                                )?;
+                                if skip_default(krate_collection, &default) {
+                                    continue;
+                                }
+                                default
                             } else {
                                 ResolvedType::Generic(Generic {
                                     name: generic_param_def.name.clone(),
@@ -127,17 +143,22 @@ pub(crate) fn resolve_type(
                                 _ => unreachable!(),
                             }
                             .params
-                            .iter()
-                            .map(|p| p.name.trim_start_matches('\'').to_string());
-                            for (arg, _) in args.iter().zip(generic_arg_defs) {
-                                let generic_argument = match arg {
-                                    GenericArg::Lifetime(l) => {
-                                        if l == "'static" {
+                            .as_slice();
+                            for (i, arg_def) in generic_arg_defs.iter().enumerate() {
+                                let generic_argument = match &arg_def.kind {
+                                    GenericParamDefKind::Lifetime { .. } => {
+                                        let mut lifetime_name = arg_def.name.clone();
+                                        if let Some(arg) = args.get(i) {
+                                            if let GenericArg::Lifetime(l) = &arg {
+                                                lifetime_name = l.clone();
+                                            }
+                                        }
+                                        if lifetime_name == "'static" {
                                             GenericArgument::Lifetime(
                                                 GenericLifetimeParameter::Static,
                                             )
                                         } else {
-                                            let name = l.trim_start_matches('\'');
+                                            let name = lifetime_name.trim_start_matches('\'');
                                             let lifetime = if name == "_" {
                                                 GenericLifetimeParameter::Named("_".into())
                                             } else {
@@ -146,37 +167,53 @@ pub(crate) fn resolve_type(
                                             GenericArgument::Lifetime(lifetime)
                                         }
                                     }
-                                    GenericArg::Type(generic_type) => {
-                                        if let Type::Generic(generic) = generic_type {
-                                            if let Some(resolved_type) =
-                                                generic_bindings.get(generic)
-                                            {
-                                                GenericArgument::TypeParameter(
-                                                    resolved_type.to_owned(),
-                                                )
+                                    GenericParamDefKind::Type { default, .. } => {
+                                        if let Some(GenericArg::Type(generic_type)) = args.get(i) {
+                                            if let Type::Generic(generic) = generic_type {
+                                                if let Some(resolved_type) =
+                                                    generic_bindings.get(generic)
+                                                {
+                                                    GenericArgument::TypeParameter(
+                                                        resolved_type.to_owned(),
+                                                    )
+                                                } else {
+                                                    GenericArgument::TypeParameter(
+                                                        ResolvedType::Generic(Generic {
+                                                            name: generic.to_owned(),
+                                                        }),
+                                                    )
+                                                }
                                             } else {
-                                                GenericArgument::TypeParameter(
-                                                    ResolvedType::Generic(Generic {
-                                                        name: generic.to_owned(),
-                                                    }),
-                                                )
+                                                GenericArgument::TypeParameter(resolve_type(
+                                                    generic_type,
+                                                    used_by_package_id,
+                                                    krate_collection,
+                                                    generic_bindings,
+                                                )?)
                                             }
-                                        } else {
-                                            GenericArgument::TypeParameter(resolve_type(
-                                                generic_type,
-                                                used_by_package_id,
+                                        } else if let Some(default) = default {
+                                            let default = resolve_type(
+                                                &default,
+                                                &global_type_id.package_id,
                                                 krate_collection,
-                                                generic_bindings,
-                                            )?)
+                                                &generic_bindings,
+                                            )?;
+                                            if skip_default(krate_collection, &default) {
+                                                continue;
+                                            }
+                                            GenericArgument::TypeParameter(default)
+                                        } else {
+                                            GenericArgument::TypeParameter(ResolvedType::Generic(
+                                                Generic {
+                                                    name: arg_def.name.clone(),
+                                                },
+                                            ))
                                         }
                                     }
-                                    GenericArg::Const(_) => {
+                                    GenericParamDefKind::Const { .. } => {
                                         return Err(anyhow!(
                                             "I don't support const generics in types yet. Sorry!"
                                         ));
-                                    }
-                                    GenericArg::Infer => {
-                                        return Err(anyhow!("I don't support inferred generic arguments in types yet. Sorry!"));
                                     }
                                 };
                                 generics.push(generic_argument);
@@ -198,8 +235,8 @@ pub(crate) fn resolve_type(
         }
         Type::BorrowedRef {
             lifetime,
-            mutable,
             type_,
+            is_mutable,
         } => {
             let resolved_type = resolve_type(
                 type_,
@@ -208,7 +245,7 @@ pub(crate) fn resolve_type(
                 generic_bindings,
             )?;
             let t = TypeReference {
-                is_mutable: *mutable,
+                is_mutable: *is_mutable,
                 lifetime: lifetime.to_owned().into(),
                 inner: Box::new(resolved_type),
             };
@@ -256,13 +293,18 @@ pub(crate) fn resolve_callable(
     krate_collection: &CrateCollection,
     callable_path: &ResolvedPath,
 ) -> Result<Callable, CallableResolutionError> {
-    let (callable_type, qualified_self_type) =
-        callable_path.find_rustdoc_items(krate_collection)?;
+    let (
+        ResolvedItemWithParent {
+            item: callable,
+            parent,
+        },
+        qualified_self_type,
+    ) = callable_path.find_rustdoc_items(krate_collection)?;
     let used_by_package_id = &callable_path.package_id;
-    let (header, decl, fn_generics_defs, invocation_style) = match &callable_type.item.item.inner {
+    let (header, decl, fn_generics_defs, invocation_style) = match &callable.item.inner {
         ItemEnum::Function(f) => (
             &f.header,
-            &f.decl,
+            &f.sig,
             &f.generics,
             InvocationStyle::FunctionCall,
         ),
@@ -280,13 +322,16 @@ pub(crate) fn resolve_callable(
     if let Some(qself) = qualified_self_type {
         generic_bindings.insert("Self".to_string(), qself);
     }
-    if let Some(parent) = &callable_type.parent {
+    let parent_info = parent.map(|p| {
         let parent_segments = callable_path.segments[..callable_path.segments.len() - 1].to_vec();
         let parent_path = ResolvedPath {
             segments: parent_segments,
             qualified_self: callable_path.qualified_self.clone(),
             package_id: callable_path.package_id.clone(),
         };
+        (p, parent_path)
+    });
+    if let Some((parent, parent_path)) = &parent_info {
         if matches!(parent.item.inner, ItemEnum::Trait(_)) {
             if let Err(e) = get_trait_generic_bindings(
                 parent,
@@ -297,7 +342,7 @@ pub(crate) fn resolve_callable(
                 tracing::trace!(error.msg = %e, error.details = ?e, "Error getting trait generic bindings");
             }
         } else {
-            match resolve_type_path_with_item(&parent_path, parent, krate_collection) {
+            match resolve_type_path_with_item(parent_path, parent, krate_collection) {
                 Ok(parent_type) => {
                     generic_bindings.insert("Self".to_string(), parent_type);
                 }
@@ -320,7 +365,7 @@ pub(crate) fn resolve_callable(
             GenericParameterResolutionError {
                 generic_type: generic_type.to_owned(),
                 callable_path: callable_path.to_owned(),
-                callable_item: callable_type.item.item.clone().into_owned(),
+                callable_item: callable.item.clone().into_owned(),
                 source: Arc::new(e),
             }
         })?;
@@ -353,7 +398,7 @@ pub(crate) fn resolve_callable(
                 return Err(InputParameterResolutionError {
                     parameter_type: parameter_type.to_owned(),
                     callable_path: callable_path.to_owned(),
-                    callable_item: callable_type.item.item.into_owned(),
+                    callable_item: callable.item.into_owned(),
                     source: Arc::new(e),
                     parameter_index,
                 }
@@ -376,7 +421,7 @@ pub(crate) fn resolve_callable(
                     return Err(OutputTypeResolutionError {
                         output_type: output_type.to_owned(),
                         callable_path: callable_path.to_owned(),
-                        callable_item: callable_type.item.item.into_owned(),
+                        callable_item: callable.item.into_owned(),
                         source: Arc::new(e),
                     }
                     .into());
@@ -384,14 +429,113 @@ pub(crate) fn resolve_callable(
             }
         }
     };
+
+    // We need to make sure that we always refer to user-registered types using a public path, even though they
+    // might have been registered using a private path (e.g. `self::...` where `self` is a private module).
+    // For this reason, we fall back to the canonical path—i.e. the shortest public path for the given item.
+    // TODO: We should do the same for qualified self, if it's populated.
+    let canonical_path = {
+        // If the item is a method, we start by finding the canonical path to its parent—i.e. the struct/enum/trait
+        // to which the method is attached.
+        let parent_canonical_path = match parent_info {
+            Some((parent, parent_path)) => {
+                match krate_collection.get_canonical_path_by_global_type_id(&parent.item_id) {
+                    Ok(canonical_segments) => {
+                        let mut segments: Vec<_> = canonical_segments
+                            .into_iter()
+                            .map(|s| ResolvedPathSegment {
+                                ident: s.into(),
+                                generic_arguments: vec![],
+                            })
+                            .collect();
+                        // The canonical path doesn't include the (populated or omitted) generic arguments from the user-provided path,
+                        // so we need to add them back in.
+                        segments.last_mut().unwrap().generic_arguments = parent_path
+                            .segments
+                            .last()
+                            .unwrap()
+                            .generic_arguments
+                            .clone();
+                        Some(ResolvedPath {
+                            segments,
+                            qualified_self: parent_path.qualified_self.clone(),
+                            package_id: parent.item_id.package_id.clone(),
+                        })
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            package_id = parent.item_id.package_id.repr(),
+                            item_id = ?parent.item_id.rustdoc_item_id,
+                            "Failed to find canonical path for {:?}",
+                            parent_path
+                        );
+                        Some(parent_path)
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        let canonical_path = match parent_canonical_path {
+            Some(p) => {
+                // We have already canonicalized the parent path, so we just need to append the method name and we're done.
+                let mut segments = p.segments;
+                segments.push(callable_path.segments.last().unwrap().clone());
+                ResolvedPath {
+                    segments,
+                    qualified_self: callable_path.qualified_self.clone(),
+                    package_id: p.package_id.clone(),
+                }
+            }
+            None => {
+                // There was no parent, it's a free function or a straight struct/enum. We need to go through the same process
+                // we applied for the parent.
+                match krate_collection.get_canonical_path_by_global_type_id(&callable.item_id) {
+                    Ok(p) => {
+                        let mut segments: Vec<_> = p
+                            .into_iter()
+                            .map(|s| ResolvedPathSegment {
+                                ident: s.into(),
+                                generic_arguments: vec![],
+                            })
+                            .collect();
+                        // The canonical path doesn't include the (populated or omitted) generic arguments from the user-provided callable path,
+                        // so we need to add them back in.
+                        segments.last_mut().unwrap().generic_arguments = callable_path
+                            .segments
+                            .last()
+                            .unwrap()
+                            .generic_arguments
+                            .clone();
+                        ResolvedPath {
+                            segments,
+                            qualified_self: callable_path.qualified_self.clone(),
+                            package_id: callable.item_id.package_id.clone(),
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            package_id = callable.item_id.package_id.repr(),
+                            item_id = ?callable.item_id.rustdoc_item_id,
+                            "Failed to find canonical path for {:?}",
+                            callable_path
+                        );
+                        callable_path.to_owned()
+                    }
+                }
+            }
+        };
+        canonical_path
+    };
+
     let callable = Callable {
-        is_async: header.async_,
+        is_async: header.is_async,
         takes_self_as_ref,
         output: output_type_path,
-        path: callable_path.to_owned(),
+        path: canonical_path,
         inputs: resolved_parameter_types,
         invocation_style,
-        source_coordinates: Some(callable_type.item.item_id),
+        source_coordinates: Some(callable.item_id),
     };
     Ok(callable)
 }
@@ -492,7 +636,7 @@ pub(crate) fn resolve_type_path_with_item(
                 },
             }
         } else {
-            match generic_def.kind {
+            match &generic_def.kind {
                 GenericParamDefKind::Lifetime { .. } => {
                     let lifetime_name = generic_def.name.trim_start_matches('\'');
                     if lifetime_name == "static" {
@@ -503,10 +647,23 @@ pub(crate) fn resolve_type_path_with_item(
                         ))
                     }
                 }
-                GenericParamDefKind::Type { .. } => {
-                    GenericArgument::TypeParameter(ResolvedType::Generic(Generic {
-                        name: generic_def.name.clone(),
-                    }))
+                GenericParamDefKind::Type { default, .. } => {
+                    if let Some(default) = default {
+                        let default = resolve_type(
+                            default,
+                            used_by_package_id,
+                            krate_collection,
+                            &HashMap::new(),
+                        )?;
+                        if skip_default(krate_collection, &default) {
+                            continue;
+                        }
+                        GenericArgument::TypeParameter(default)
+                    } else {
+                        GenericArgument::TypeParameter(ResolvedType::Generic(Generic {
+                            name: generic_def.name.clone(),
+                        }))
+                    }
                 }
                 GenericParamDefKind::Const { .. } => {
                     unimplemented!("const generic parameters are not supported yet")
@@ -584,4 +741,22 @@ pub(crate) struct OutputTypeResolutionError {
     pub output_type: Type,
     #[source]
     pub source: Arc<anyhow::Error>,
+}
+
+/// This is a gigantic hack to work around an issue with `std`'s collections:
+/// they are all generic over the allocator type, but the default (`alloc::alloc::Global`)
+/// is a nightly-only type.
+/// If you spell it out, the code won't compile on stable, even though it does
+/// exactly the same thing as omitting the parameter.
+fn skip_default(krate_collection: &CrateCollection, default: &ResolvedType) -> bool {
+    static GLOBAL_ALLOCATOR: OnceCell<ResolvedType> = OnceCell::new();
+
+    let alloc = GLOBAL_ALLOCATOR.get_or_init(|| {
+        process_framework_path(
+            "alloc::alloc::Global",
+            krate_collection.package_graph(),
+            krate_collection,
+        )
+    });
+    alloc == default
 }
